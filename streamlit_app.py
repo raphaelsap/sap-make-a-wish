@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -11,14 +12,21 @@ import requests
 import streamlit as st
 
 from markdown import markdown
-from fpdf import FPDF
+from sap_agents_api import SAPAgentAPIError
+from server.app import (
+    TableDefinition,
+    create_schema_with_tables,
+    ensure_catalog,
+    hana_connect,
+    register_agent_metadata,
+    sanitize_identifier,
+)
 
 
 PPLX_API_URL = "https://api.perplexity.ai/chat/completions"
 DEFAULT_PPLX_MODEL = os.getenv("PPLX_MODEL", "sonar")
 PROMPT_FILE = Path(__file__).parent / "prompts" / "perplexity.md"
 SAP_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg"
-BACKEND_AGENT_ENDPOINT = os.getenv("BACKEND_AGENT_ENDPOINT", "http://localhost:8000/api/agents")
 
 
 @st.cache_resource(show_spinner=False)
@@ -251,138 +259,6 @@ def render_holographic_card(content: str) -> None:
         unsafe_allow_html=True,
     )
 
-
-def generate_pdf_from_markdown(markdown_text: str) -> bytes:
-    pdf = FPDF(format="A4")
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-
-    def set_body_font() -> None:
-        pdf.set_font("Helvetica", size=11)
-
-    set_body_font()
-    is_code_block = False
-
-    for raw_line in markdown_text.splitlines():
-        line = raw_line.rstrip()
-
-        if line.startswith("```"):
-            is_code_block = not is_code_block
-            if is_code_block:
-                pdf.set_font("Courier", size=9)
-            else:
-                set_body_font()
-            continue
-
-        if is_code_block:
-            pdf.multi_cell(0, 5, line or " ")
-            continue
-
-        stripped = line.strip()
-        if not stripped:
-            pdf.ln(4)
-            continue
-
-        if stripped.startswith("### "):
-            pdf.set_font("Helvetica", "B", 12)
-            pdf.multi_cell(0, 7, stripped[4:])
-            pdf.ln(2)
-            set_body_font()
-        elif stripped.startswith("## "):
-            pdf.set_font("Helvetica", "B", 14)
-            pdf.multi_cell(0, 8, stripped[3:])
-            pdf.ln(2)
-            set_body_font()
-        elif stripped.startswith("# "):
-            pdf.set_font("Helvetica", "B", 16)
-            pdf.multi_cell(0, 9, stripped[2:])
-            pdf.ln(3)
-            set_body_font()
-        elif stripped.startswith("- "):
-            set_body_font()
-            pdf.multi_cell(0, 6, f"• {stripped[2:]}")
-        elif stripped.startswith("| ") and stripped.endswith("|"):
-            set_body_font()
-            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-            pdf.multi_cell(0, 6, " | ".join(cells))
-        else:
-            set_body_font()
-            pdf.multi_cell(0, 6, stripped)
-
-    return pdf.output(dest="S").encode("latin-1")
-
-
-def build_summary_markdown(package: Dict[str, Any]) -> str:
-    customer = st.session_state.get("customer", "—")
-    use_case = st.session_state.get("use_case", "—")
-    main_solution = st.session_state.get("main_solution", "—")
-    metric = st.session_state.get("metric", "—")
-    agent_name = st.session_state.get("agent_name_edit", package.get("agentName", "—"))
-    schema_name = st.session_state.get("schema_name_edit", package.get("schemaName", "—"))
-    agent_prompt = st.session_state.get("agent_prompt_edit", package.get("agentPrompt", ""))
-    business_case = st.session_state.get("business_case_card_edit", package.get("businessCaseCard", ""))
-
-    lines: List[str] = [
-        "# SAP BTP - Make a Wish Summary",
-        "",
-        "## Scenario Overview",
-        f"- **Customer:** {customer}",
-        f"- **Use case:** {use_case}",
-        f"- **Main SAP solution:** {main_solution}",
-        f"- **Optimisation metric:** {metric}",
-        "",
-        "## Agent Configuration",
-        f"- **Agent name:** {agent_name}",
-        f"- **Schema name:** {schema_name}",
-        "",
-        "### Agent Prompt",
-        "```",
-        agent_prompt.strip(),
-        "```",
-        "",
-        "### Business Case Card",
-        business_case.strip() or "_(No business case provided.)_",
-        "",
-        "## Tables",
-    ]
-
-    tables = package.get("tables", [])
-    if not tables:
-        lines.append("_(No tables returned by Perplexity.)_")
-    else:
-        for table in tables:
-            table_name = table.get("name", "Unnamed table")
-            desc = table.get("desc", "")
-            lines.extend(
-                [
-                    f"### Table: {table_name}",
-                    desc if desc else "",
-                    "",
-                    "| Column | Type | Nullable | Primary | Description |",
-                    "| --- | --- | --- | --- | --- |",
-                ]
-            )
-            for column in table.get("columns", []):
-                lines.append(
-                    f"| {column.get('name', '')} | {column.get('type', '')} | "
-                    f"{'Yes' if column.get('nullable', True) else 'No'} | "
-                    f"{'Yes' if column.get('isPrimaryKey') else 'No'} | {column.get('description', '')} |"
-                )
-
-            rows = table.get("rows", [])
-            if rows:
-                lines.extend([
-                    "",
-                    "Sample rows:",
-                    "```json",
-                    json.dumps(rows[:3], indent=2),
-                    "```",
-                ])
-            lines.append("")
-
-    return "\n".join(lines).strip()
-
-
 def build_agent_payload(package: Dict[str, Any], customer: str, use_case: str) -> Dict[str, Any]:
     agent_name = st.session_state.get("agent_name_edit") or package.get("agentName", "SAP Joule Agent")
     agent_prompt = st.session_state.get("agent_prompt_edit") or package.get("agentPrompt", "")
@@ -427,6 +303,15 @@ def regenerate_proposal(refinement_text: str) -> None:
 
 def streamlit_app() -> None:
     st.set_page_config(page_title="SAP BTP - Make a Wish", layout="wide")
+
+    sap_defaults = {
+        "sap_agent_name": "Web Search Expert",
+        "sap_agent_expert_in": "You are an expert in searching the web",
+        "sap_agent_instructions": "## WebSearch Tool Hint\nTry to append 'Wikipedia' to your search query",
+    }
+    for key, value in sap_defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
     header_cols = st.columns([1, 3])
     with header_cols[0]:
@@ -479,6 +364,13 @@ def streamlit_app() -> None:
                     st.session_state["schema_name_edit"] = package.get("schemaName", "")
                     st.session_state["agent_prompt_edit"] = package.get("agentPrompt", "")
                     st.session_state["business_case_card_edit"] = package.get("businessCaseCard", "")
+                    st.session_state["sap_agent_name"] = package.get("agentName", st.session_state.get("sap_agent_name", "Web Search Expert"))
+                    st.session_state["sap_agent_instructions"] = package.get("agentPrompt", st.session_state.get("sap_agent_instructions", ""))
+                    st.session_state["sap_agent_expert_in"] = (
+                        f"You are an expert in {main_solution or use_case}"
+                        if (main_solution or use_case)
+                        else st.session_state.get("sap_agent_expert_in", "You are an expert in searching the web")
+                    )
                     st.session_state.pop("agent_success", None)
                     st.session_state.pop("agent_error", None)
                     st.success("Perplexity response received. Review the proposal below.")
@@ -544,58 +436,112 @@ def streamlit_app() -> None:
         st.session_state.get("customer", ""),
         st.session_state.get("use_case", ""),
     )
-    summary_markdown = build_summary_markdown(package)
-    pdf_bytes = generate_pdf_from_markdown(summary_markdown)
 
-    st.download_button(
-        "Generate PDF summary 📑",
-        data=pdf_bytes,
-        file_name=f"sap-btp-make-a-wish-{st.session_state.get('schema_name_edit', 'agent')}.pdf",
-        mime="application/pdf",
-        use_container_width=True,
-    )
+    button_cols = st.columns((1, 1))
+    with button_cols[0]:
+        st.info("PDF export is temporarily unavailable while we rebuild it.")
 
-    payload_ready = all(
-        [
-            payload.get("name"),
-            payload.get("prompt"),
-            payload.get("customer"),
-            payload.get("useCase"),
-            payload.get("tables"),
-        ]
-    )
+    st.markdown("**SAP Agents configuration**")
+    agent_cols = st.columns(2)
+    with agent_cols[0]:
+        st.text_input("Agent name", key="sap_agent_name")
+        st.text_area("Expert in", key="sap_agent_expert_in", height=110)
+    with agent_cols[1]:
+        st.text_area("Initial instructions", key="sap_agent_instructions", height=160)
+        st.caption(
+            "Agent type fixed to 'smart', safety checks enabled, iterations set to 100, models: OpenAiGpt4oMini → OpenAiGpt4o."
+        )
 
-    if st.button("🚀 Generate agent", type="primary", disabled=not payload_ready):
-        if not BACKEND_AGENT_ENDPOINT:
-            st.session_state["agent_error"] = "BACKEND_AGENT_ENDPOINT is not configured."
+    payload_ready = True
+
+    with button_cols[1]:
+        generate_clicked = st.button(
+            "🚀 Generate agent",
+            type="primary",
+            disabled=not payload_ready,
+            use_container_width=True,
+        )
+
+    if generate_clicked:
+        hana_success = False
+        conn = None
+        schema_name = sanitize_identifier(
+            payload.get("schemaName", f"{st.session_state.get('customer', 'agent')}_schema"),
+            fallback="JOULE_SCHEMA",
+        )
+        payload["schemaName"] = schema_name
+
+        try:
+            conn = hana_connect()
+            ensure_catalog(conn)
+            table_models = [TableDefinition(**table) for table in payload.get("tables", [])]
+            with st.spinner("Provisioning HANA schema and loading tables…"):
+                create_schema_with_tables(conn, schema_name, table_models)
+                register_agent_metadata(
+                    conn,
+                    agent_id=str(uuid.uuid4()),
+                    agent_name=payload.get("name", "SAP Joule Agent"),
+                    use_case=payload.get("useCase", ""),
+                    customer=payload.get("customer", ""),
+                    schema_name=schema_name,
+                    prompt=payload.get("prompt", ""),
+                    business_case_card=payload.get("businessCaseCard", ""),
+                    tables=table_models,
+                )
+                hana_success = True
+                st.success(f"HANA schema '{schema_name}' created and tables populated.")
+        except Exception as exc:  # pragma: no cover - HANA diagnostics
+            st.session_state["agent_error"] = f"HANA provisioning failed: {exc}"
+            st.error(st.session_state["agent_error"])
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # pragma: no cover - cleanup best effort
+                    pass
+
+        agent_payload = {
+            "name": st.session_state.get("sap_agent_name", "Web Search Expert").strip() or "Web Search Expert",
+            "type": "smart",
+            "safetyCheck": True,
+            "expertIn": st.session_state.get("sap_agent_expert_in", "").strip() or "You are an expert in searching the web",
+            "initialInstructions": st.session_state.get("sap_agent_instructions", "").strip()
+            or "## WebSearch Tool Hint\nTry to append 'Wikipedia' to your search query",
+            "iterations": 100,
+            "baseModel": "OpenAiGpt4oMini",
+            "advancedModel": "OpenAiGpt4o",
+        }
+
+        try:
+            from create_agent import create_agent
+
+            with st.spinner("Creating SAP Agent via SAP Agents service…"):
+                data = create_agent(payload=agent_payload)
+        except ImportError as exc:
+            st.session_state["agent_error"] = f"Unable to import create_agent helper: {exc}"
+            st.error(st.session_state["agent_error"])
+        except SAPAgentAPIError as exc:
+            st.session_state["agent_error"] = f"SAP Agents API error ({exc.status_code}): {exc}"
+            st.error(st.session_state["agent_error"])
+        except Exception as exc:  # pragma: no cover
+            st.session_state["agent_error"] = f"Agent creation failed: {exc}"
             st.error(st.session_state["agent_error"])
         else:
-            try:
-                with st.spinner("Deploying schema, loading tables, and creating SAP agent…"):
-                    response = requests.post(
-                        BACKEND_AGENT_ENDPOINT,
-                        json=payload,
-                        timeout=180,
-                    )
-                response.raise_for_status()
-                data = response.json()
-            except requests.RequestException as exc:
-                st.session_state["agent_error"] = f"Backend request failed: {exc}"
-                st.error(st.session_state["agent_error"])
-            except ValueError as exc:  # JSON decode issues
-                st.session_state["agent_error"] = f"Backend returned invalid JSON: {exc}"
-                st.error(st.session_state["agent_error"])
-            else:
-                st.session_state["agent_success"] = data
-                st.session_state["agent_error"] = None
-                st.success("Agent created successfully. HANA schema provisioned and SAP Agents entry ready.")
-                st.json(data)
+            st.session_state["agent_success"] = data
+            st.session_state["agent_error"] = None
+            st.success("Agent created successfully in SAP Agents.")
+            st.json(data)
 
     if st.session_state.get("agent_error"):
         st.warning(st.session_state["agent_error"])
 
     with st.expander("Agent payload (JSON)", expanded=False):
         st.code(json.dumps(payload, indent=2), language="json")
+
+    if st.session_state.get("agent_success"):
+        st.markdown(
+            "[Open SAP Agents workspace →](https://agents-y0yj1uar.baf-dev.cfapps.eu12.hana.ondemand.com/ui/index.html#/agents)"
+        )
 
 
 if __name__ == "__main__":

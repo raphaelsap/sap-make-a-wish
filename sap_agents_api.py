@@ -43,10 +43,18 @@ class SAPAgentsClient:
         client_secret: Optional[str] = None,
         session: Optional[requests.Session] = None,
     ) -> None:
-        self.base_url = (base_url or os.getenv('SAP_AGENT_BASE_URL', '')).rstrip('/') + '/'
-        self.oauth_url = oauth_url or os.getenv('SAP_AGENT_OAUTH_URL')
-        self.client_id = client_id or os.getenv('SAP_AGENT_CLIENT_ID')
-        self.client_secret = client_secret or os.getenv('SAP_AGENT_CLIENT_SECRET')
+        def _clean(value: Optional[str], *, default: str = '') -> str:
+            if value is None:
+                return default
+            return value.strip().strip('"').strip("'")
+
+        raw_base = base_url or os.getenv('SAP_AGENT_BASE_URL', '')
+        cleaned_base = _clean(raw_base)
+        self.base_url = cleaned_base.rstrip('/') + '/' if cleaned_base else ''
+
+        self.oauth_url = _clean(oauth_url or os.getenv('SAP_AGENT_OAUTH_URL'))
+        self.client_id = _clean(client_id or os.getenv('SAP_AGENT_CLIENT_ID'))
+        self.client_secret = _clean(client_secret or os.getenv('SAP_AGENT_CLIENT_SECRET'))
         self.session = session or requests.Session()
         self._token: Optional[OAuthToken] = None
 
