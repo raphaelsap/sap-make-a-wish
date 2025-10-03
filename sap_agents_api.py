@@ -116,7 +116,7 @@ class SAPAgentsClient:
             raise SAPAgentAPIError('SAP Agents response was not valid JSON', payload=response.text) from exc
 
     def create_agent(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self.post('', payload)
+        return self.post('Agents', payload)
 
 
 _default_client: Optional[SAPAgentsClient] = None

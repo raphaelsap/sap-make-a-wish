@@ -29,6 +29,7 @@ Set these in your shell or a `.env` file before launching Streamlit:
 - `SAP_AGENT_OAUTH_URL` — OAuth token endpoint.
 - `SAP_AGENT_CLIENT_ID` / `SAP_AGENT_CLIENT_SECRET` — Credentials for `sap_agents_api.py`.
 - `SAP_AGENT_UI_BASE_URL` *(optional)* — Used for deep links after creation.
+- `BACKEND_AGENT_ENDPOINT` — URL to the FastAPI endpoint that provisions HANA and calls SAP Agents (default `http://localhost:8000/api/agents`).
 - `HANA_*` — Required only when the FastAPI backend provisions SAP HANA assets.
 
 > ⚠️ Keep secrets out of version control. `.env` is ignored by git.
