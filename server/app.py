@@ -17,7 +17,7 @@ except ImportError as exc:  # pragma: no cover
         'hdbcli package is required. Install dependencies via `pip install -r server/requirements.txt`.'
     ) from exc
 
-from sap_agents_api import PostAgentsAPI, SAPAgentAPIError
+from sap_agents_api import SAPAgentAPIError, SAPAgentsClient, get_default_client
 
 LOGGER = logging.getLogger('sap_joule_backend')
 logging.basicConfig(level=logging.INFO)
@@ -318,7 +318,13 @@ def create_agent(payload: AgentPayload):
     }
 
     try:
-        agent_response = PostAgentsAPI('', agent_payload)
+        client: SAPAgentsClient = get_default_client()
+    except RuntimeError as exc:
+        LOGGER.error('SAP Agents configuration error: %s', exc)
+        raise HTTPException(status_code=500, detail='SAP Agents configuration missing.') from exc
+
+    try:
+        agent_response = client.create_agent(agent_payload)
     except SAPAgentAPIError as exc:  # pragma: no cover - surface upstream for diagnostics
         LOGGER.error('SAP Agent API error: %s', exc)
         raise HTTPException(status_code=502, detail='Failed to create agent in SAP Agents service.') from exc

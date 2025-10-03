@@ -1,0 +1,12 @@
+applications:
+  - name: sap-btp-make-a-wish
+    memory: 1G
+    disk_quota: 1G
+    instances: 1
+    buildpacks:
+      - python_buildpack
+    command: ./start.sh
+    timeout: 180
+    env:
+      STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+      PYTHONUNBUFFERED: "1"
