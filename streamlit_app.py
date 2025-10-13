@@ -184,6 +184,98 @@ def load_prompt_sections() -> Dict[str, str]:
     }
 
 
+@st.cache_resource(show_spinner=False)
+def load_agent_context() -> str:
+    """Load extended SAP context and Data & Web tool mandate block."""
+    try:
+        return (Path(__file__).parent / "prompts" / "agent_context.md").read_text(encoding="utf-8").strip()
+    except Exception:
+        # Fallback minimal notice if file missing
+        return (
+            "You operate within an SAP system. Use the 'Data and Web tool' every conversation to source imagined tables and web context. "
+            "Follow policy, decision tree, output format, and behavior rules."
+        )
+
+
+def adapt_agent_prompt_with_context(
+    customer: str,
+    use_case: str,
+    main_solution: str,
+    metric: str,
+    *,
+    base_prompt: str,
+    context_md: str,
+    temperature: float = 0.15,
+    max_tokens: int = 4096,
+) -> str:
+    """
+    Use Perplexity to merge and adapt the base LLM-generated prompt with agent_context.md
+    to the specific customer scenario. Returns the final prompt text (no code fences).
+    """
+    api_key = os.getenv("PPLX_API_KEY")
+    if not api_key:
+        raise RuntimeError("Set PPLX_API_KEY in your environment to adapt the prompt with Perplexity.")
+
+    system_instruction = (
+        "You are an expert SAP Joule prompt editor. "
+        "Given (1) a basePrompt from a prior generation and (2) a contextBlock with SAP- and HANA-specific policy/format, "
+        "produce ONE cohesive, customer-tailored finalPrompt. "
+        "Integrate relevant guidance from the contextBlock, adapt it to the customer's scenario, avoid boilerplate duplication, and maintain strict policies/decision trees that apply. "
+        "Write a long, detailed, and maximally useful finalPrompt suitable for enterprise use. "
+        "Return ONLY the final prompt as plain text (no JSON, no code fences)."
+    )
+
+    user_content = f"""
+Customer: {customer}
+Use case: {use_case}
+Main SAP solution focus: {main_solution or "Not specified"}
+Metric to optimise: {metric or "Not specified"}
+
+basePrompt:
+---
+{base_prompt}
+---
+
+contextBlock (agent_context.md):
+---
+{context_md}
+---
+
+Task:
+- Merge basePrompt + contextBlock into a single finalPrompt tailored to this scenario.
+- Expand details generously where helpful to improve usefulness; keep professional SAP terminology and clarity.
+- Include only content relevant to this customer; remove redundancy.
+- Maintain any critical policies, decision trees, safety, and format requirements that apply.
+- Return ONLY the finalPrompt text, no code fences.
+""".strip()
+
+    payload = {
+        "model": DEFAULT_PPLX_MODEL,
+        "messages": [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": user_content},
+        ],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+
+    resp = requests.post(
+        PPLX_API_URL,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=120,
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Perplexity API error {resp.status_code}: {resp.text}")
+
+    data = resp.json()
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("Unexpected Perplexity response shape during prompt adaptation") from exc
+
+    return strip_code_fences(content).strip()
+
 def strip_code_fences(content: str) -> str:
     trimmed = content.strip()
     if trimmed.startswith("```"):
@@ -403,7 +495,7 @@ def build_default_tool_payloads() -> List[Dict[str, Any]]:
     p_value = os.getenv("PPLX_DESTINATION", "perplexity").strip() or "perplexity"
     return [
         {
-            "name": "Perplexity Destination",
+            "name": "Data and Web tool",
             "type": "bringyourown",
             "config": [
                 {"name": "destination", "value": p_value},
@@ -439,7 +531,7 @@ def provision_agent_tools(agent_id: str) -> List[Dict[str, Any]]:
                     dest_val = str(entry.get("value", "perplexity")) or "perplexity"
                     break
             alt_payload: Dict[str, Any] = {
-                "name": "Web Search Tool",
+                "name": "Data and Web tool",
                 "type": payload.get("type", "bringyourown"),
                 "config": [{"name": "perplexity", "value": dest_val}],
             }
@@ -447,7 +539,7 @@ def provision_agent_tools(agent_id: str) -> List[Dict[str, Any]]:
                 alt_res = create_agent_tool(agent_id, alt_payload)
                 created_tools.append(
                     {
-                        "name": alt_payload.get("name", "Web Search Tool"),
+                        "name": alt_payload.get("name", "Data and Web tool"),
                         "type": alt_payload.get("type", ""),
                         "response": alt_res,
                         "fallbackFrom": payload.get("name", "Unnamed tool"),
@@ -500,11 +592,31 @@ def regenerate_proposal(refinement_text: str) -> None:
     except Exception as exc:  # pragma: no cover
         st.error(f"Unable to regenerate the proposal: {exc}")
     else:
+        agent_context = load_agent_context()
+        try:
+            if st.session_state.get("auto_adapt_prompt", True):
+                adapted_prompt = adapt_agent_prompt_with_context(
+                    st.session_state.get("customer", ""),
+                    st.session_state.get("use_case", ""),
+                    st.session_state.get("main_solution", ""),
+                    st.session_state.get("metric", ""),
+                    base_prompt=package.get("agentPrompt", ""),
+                    context_md=agent_context,
+                    max_tokens=4096,
+                    temperature=0.15,
+                )
+            else:
+                adapted_prompt = (package.get("agentPrompt", "") + "\n\n" + agent_context).strip()
+        except Exception as exc:
+            adapted_prompt = (package.get("agentPrompt", "") + "\n\n" + agent_context).strip()
+            st.warning(f"Prompt adaptation failed, using base+context fallback: {exc}")
+
         st.session_state["demo_package"] = package
         st.session_state["agent_name_edit"] = package.get("agentName", "")
         st.session_state["schema_name_edit"] = package.get("schemaName", "")
-        st.session_state["agent_prompt_edit"] = package.get("agentPrompt", "")
+        st.session_state["agent_prompt_edit"] = adapted_prompt
         st.session_state["business_case_card_edit"] = package.get("businessCaseCard", "")
+        st.session_state["sap_agent_instructions"] = adapted_prompt
         st.success("Updated proposal received. Review the refreshed details above.")
 
 
@@ -522,6 +634,8 @@ def streamlit_app() -> None:
             st.session_state[key] = value
     if "agent_tools" not in st.session_state:
         st.session_state["agent_tools"] = []
+    if "auto_adapt_prompt" not in st.session_state:
+        st.session_state["auto_adapt_prompt"] = True
 
     st.markdown(
         f'''
@@ -555,6 +669,7 @@ def streamlit_app() -> None:
             value=st.session_state.get("metric", ""),
             placeholder="e.g. Net revenue retention, Time-to-value, Customer adoption score",
         )
+
         submitted = st.form_submit_button("Generate Joule Agent 🚀")
 
     if submitted:
@@ -573,12 +688,33 @@ def streamlit_app() -> None:
                     st.session_state["use_case"] = use_case.strip()
                     st.session_state["main_solution"] = main_solution.strip()
                     st.session_state["metric"] = metric.strip()
+                    agent_context = load_agent_context()
+                    # Persist the UI choice for future runs
+                    st.session_state["auto_adapt_prompt"] = True
+                    try:
+                        if st.session_state.get("auto_adapt_prompt", True):
+                            adapted_prompt = adapt_agent_prompt_with_context(
+                                customer,
+                                use_case,
+                                main_solution,
+                                metric,
+                                base_prompt=package.get("agentPrompt", ""),
+                                context_md=agent_context,
+                                max_tokens=4096,
+                                temperature=0.15,
+                            )
+                        else:
+                            adapted_prompt = (package.get("agentPrompt", "") + "\n\n" + agent_context).strip()
+                    except Exception as exc:
+                        adapted_prompt = (package.get("agentPrompt", "") + "\n\n" + agent_context).strip()
+                        st.warning(f"Prompt adaptation failed, using base+context fallback: {exc}")
+
                     st.session_state["agent_name_edit"] = package.get("agentName", "")
                     st.session_state["schema_name_edit"] = package.get("schemaName", "")
-                    st.session_state["agent_prompt_edit"] = package.get("agentPrompt", "")
+                    st.session_state["agent_prompt_edit"] = adapted_prompt
                     st.session_state["business_case_card_edit"] = package.get("businessCaseCard", "")
                     st.session_state["sap_agent_name"] = package.get("agentName", st.session_state.get("sap_agent_name", "Web Search Expert"))
-                    st.session_state["sap_agent_instructions"] = package.get("agentPrompt", st.session_state.get("sap_agent_instructions", ""))
+                    st.session_state["sap_agent_instructions"] = adapted_prompt
                     st.session_state["sap_agent_expert_in"] = (
                         f"You are an expert in {main_solution or use_case}"
                         if (main_solution or use_case)
@@ -726,11 +862,14 @@ def streamlit_app() -> None:
         try:
             from create_agent import create_agent
 
+            base_name = st.session_state.get("sap_agent_name", "Web Search Expert").strip() or "Web Search Expert"
+            unique_suffix = str(uuid.uuid4())[:8]
+            created_name = f"{base_name}-{unique_suffix}"
+
             with st.spinner("Creating SAP Agent via SAP Agents service…"):
                 data = create_agent(
                     payload={
-                        "name": st.session_state.get("sap_agent_name", "Web Search Expert").strip()
-                        or "Web Search Expert",
+                        "name": created_name,
                         "type": "smart",
                         "safetyCheck": True,
                         "expertIn": st.session_state.get("sap_agent_expert_in", "").strip()
@@ -743,23 +882,49 @@ def streamlit_app() -> None:
                     }
                 )
 
-            agent_id = data.get("id") or data.get("agentId")
+            agent_id = data.get("id") or data.get("agentId") or data.get("ID") or data.get("Id")
             if not agent_id:
-                st.session_state["agent_error"] = "SAP Agents response did not include an agent identifier."
-                st.error(st.session_state["agent_error"])
-                return
+                try:
+                    agents = list_agents()
+                    items: List[Dict[str, Any]] = []
+                    if isinstance(agents, dict):
+                        if isinstance(agents.get("value"), list):
+                            items = agents["value"]
+                        elif isinstance(agents.get("items"), list):
+                            items = agents["items"]
+                    elif isinstance(agents, list):
+                        items = agents
+
+                    resolved_id = None
+                    for it in reversed(items):
+                        name = (it.get("name") or it.get("Name") or "").strip()
+                        _id = it.get("id") or it.get("agentId") or it.get("ID") or it.get("Id")
+                        if name == created_name and _id:
+                            resolved_id = str(_id)
+                            break
+
+                    if not resolved_id:
+                        raise RuntimeError("Could not resolve agentId for newly created agent.")
+                    agent_id = resolved_id
+                    debug_lines.append(f"Resolved agent id via listing exact name: {agent_id}")
+                except Exception as lexc:
+                    st.session_state["agent_error"] = "SAP Agents response did not include an agent identifier, and resolution failed."
+                    st.error(st.session_state["agent_error"])
+                    debug_lines.append(f"ID resolution failed: {lexc}")
+                    return
             else:
                 debug_lines.append(f"Created SAP Agent with id {agent_id}")
             debug_lines.append(f"SAP Agents base URL: {os.getenv('SAP_AGENT_BASE_URL','(unset)')}")
 
             with st.spinner("Provisioning default SAP Joule tools…"):
                 tool_summaries = provision_agent_tools(agent_id)
-
+            """
             st.session_state["agent_success"] = data
             st.session_state["agent_tools"] = tool_summaries
             st.session_state["agent_error"] = None
 
             st.success("Agent created and default tools provisioned in SAP Agents.")
+
             st.json(data)
             if tool_summaries:
                 st.markdown("**Attached tools**")
@@ -831,6 +996,7 @@ def streamlit_app() -> None:
                 st.session_state["agent_error"] = "SAP Agents API error"
                 st.session_state["agent_tools"] = []
                 debug_lines.append(f"SAP Agents API error ({getattr(exc,'status_code',None)}): {exc}")
+        """
         except Exception as exc:  # pragma: no cover
             st.session_state["agent_error"] = f"Agent creation workflow failed: {exc}"
             st.session_state["agent_tools"] = []
@@ -840,9 +1006,8 @@ def streamlit_app() -> None:
         # Debug details suppressed per requirements
 
 
-
-    with st.expander("Agent payload (JSON)", expanded=False):
-        st.code(json.dumps(payload, indent=2), language="json")
+   
+    #with st.expander("Agent payload (JSON)", expanded=False):st.code(json.dumps(payload, indent=2), language="json")
 
     if st.session_state.get("agent_success") and st.session_state.get("agent_tools"):
         st.link_button("Open SAP Agents workspace →", SAP_AGENT_UI_URL)

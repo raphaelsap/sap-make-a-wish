@@ -6,7 +6,7 @@
     "expertIn": "You are an expert in searching the web",
     "initialInstructions": "## WebSearch Tool Hint\\nTry to append 'Wikipedia' to your search query",
     "iterations": 100,
-    "baseModel": "OpenAiGpt4oMini",
+    "baseModel": "OpenAiGpt4o",
     "advancedModel": "OpenAiGpt4o"
   },
   "tools": [
