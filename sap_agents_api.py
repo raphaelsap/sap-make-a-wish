@@ -123,6 +123,33 @@ class SAPAgentsClient:
         except ValueError as exc:  # pragma: no cover - surface upstream
             raise SAPAgentAPIError('SAP Agents response was not valid JSON', payload=response.text) from exc
 
+    def get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        token = self._get_token()
+        response = self.session.get(
+            self._build_url(path),
+            headers={
+                'Authorization': f'Bearer {token}',
+                'Accept': 'application/json',
+            },
+            params=params or {},
+            timeout=60,
+        )
+
+        if response.status_code >= 400:
+            raise SAPAgentAPIError(
+                f'SAP Agents GET {path} failed with status {response.status_code}',
+                status_code=response.status_code,
+                payload=response.text,
+            )
+
+        try:
+            return response.json()
+        except ValueError as exc:  # pragma: no cover - surface upstream
+            raise SAPAgentAPIError('SAP Agents response was not valid JSON', payload=response.text) from exc
+
+    def list_agents(self) -> Dict[str, Any]:
+        return self.get('Agents')
+
     def create_agent(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.post('Agents', payload)
 
@@ -154,4 +181,9 @@ def create_agent_tool(agent_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     return client.create_tool(agent_id, payload)
 
 
-__all__ = ['SAPAgentAPIError', 'SAPAgentsClient', 'PostAgentsAPI', 'create_agent_tool', 'get_default_client']
+def list_agents() -> Dict[str, Any]:
+    client = get_default_client()
+    return client.list_agents()
+
+
+__all__ = ['SAPAgentAPIError', 'SAPAgentsClient', 'PostAgentsAPI', 'create_agent_tool', 'get_default_client', 'list_agents']

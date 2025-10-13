@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from markdown import markdown
-from sap_agents_api import SAPAgentAPIError, create_agent_tool
+from sap_agents_api import SAPAgentAPIError, create_agent_tool, list_agents
 from server.app import (
     TableDefinition,
     create_schema_with_tables,
@@ -32,10 +32,7 @@ PPLX_API_URL = "https://api.perplexity.ai/chat/completions"
 DEFAULT_PPLX_MODEL = os.getenv("PPLX_MODEL", "sonar")
 PROMPT_FILE = Path(__file__).parent / "prompts" / "perplexity.md"
 SAP_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg"
-SAP_AGENT_UI_URL = os.getenv(
-    "SAP_AGENT_UI_URL",
-    "https://agents-y0yj1uar.baf-dev.cfapps.eu12.hana.ondemand.com/ui/index.html#/agents",
-)
+SAP_AGENT_UI_URL = "https://agents-y0yj1uar.baf-dev.cfapps.eu12.hana.ondemand.com/ui/index.html#/agents"
 
 
 def inject_global_styles() -> None:
@@ -48,10 +45,13 @@ def inject_global_styles() -> None:
 
             html, body, [data-testid="stAppViewContainer"] {
                 font-family: 'Manrope', sans-serif;
-                background: radial-gradient(circle at 15% 20%, rgba(180, 146, 255, 0.28), transparent 55%),
-                            radial-gradient(circle at 80% 15%, rgba(140, 107, 255, 0.2), transparent 60%),
-                            linear-gradient(135deg, #f3ecff 0%, #f5eeff 45%, #fbf1ff 100%);
-                color: #1f104f;
+                background: radial-gradient(circle at 20% 20%, rgba(28, 35, 52, 0.6), transparent 55%),
+                            radial-gradient(circle at 80% 15%, rgba(22, 27, 41, 0.5), transparent 60%),
+                            linear-gradient(135deg, #0b1220 0%, #0e1426 50%, #121a2e 100%);
+                color: #ffffff;
+            }
+            body * {
+                color: #ffffff !important;
             }
 
             [data-testid="stHeader"] { display: none; }
@@ -73,11 +73,11 @@ def inject_global_styles() -> None:
 
             .app-banner__tagline {
                 font-weight: 600;
-                color: rgba(68, 32, 153, 0.62);
+                color: #ffffff;
             }
 
             [data-testid="stForm"] {
-                background: rgba(255, 255, 255, 0.88);
+                background: rgba(16, 20, 30, 0.92);
                 border-radius: 28px;
                 border: 1px solid rgba(116, 88, 255, 0.18);
                 padding: 2.4rem 2.6rem;
@@ -87,15 +87,21 @@ def inject_global_styles() -> None:
 
             [data-testid="stForm"] label {
                 font-weight: 600;
-                color: rgba(32, 12, 86, 0.78);
+                color: #ffffff;
             }
 
             div[data-baseweb="input"] > div > input,
             [data-baseweb="textarea"] textarea {
                 border-radius: 16px !important;
                 border: 1px solid rgba(125, 88, 255, 0.22) !important;
-                background: rgba(255, 255, 255, 0.92) !important;
+                background: rgba(22, 26, 36, 0.92) !important;
                 box-shadow: inset 0 1px 2px rgba(82, 40, 160, 0.08) !important;
+                color: #ffffff !important;
+            }
+            div[data-baseweb="input"] > div > input::placeholder,
+            [data-baseweb="textarea"] textarea::placeholder {
+                color: #ffffff !important;
+                opacity: 1 !important;
             }
 
             div[data-baseweb="input"] > div > input:focus,
@@ -111,11 +117,12 @@ def inject_global_styles() -> None:
                 border-radius: 999px !important;
                 font-weight: 700 !important;
                 padding: 0.7rem 1.8rem !important;
+                color: #ffffff !important;
             }
 
             [data-testid="baseButton-secondary"] {
                 background: rgba(255, 255, 255, 0.8) !important;
-                color: #5f34cc !important;
+                color: #ffffff !important;
                 border: 1px solid rgba(125, 88, 255, 0.22) !important;
                 border-radius: 999px !important;
                 font-weight: 700 !important;
@@ -124,18 +131,20 @@ def inject_global_styles() -> None:
             }
 
             [data-testid="metric-container"] {
-                background: rgba(255, 255, 255, 0.86);
+                background: rgba(18, 22, 32, 0.9);
                 border-radius: 20px;
                 border: 1px solid rgba(118, 88, 255, 0.18);
                 box-shadow: 0 18px 42px rgba(80, 40, 160, 0.14);
                 padding: 1.2rem 1.5rem;
+                color: #ffffff;
             }
 
             [data-testid="stExpander"] {
-                background: rgba(255, 255, 255, 0.84);
+                background: rgba(18, 22, 32, 0.9);
                 border-radius: 20px !important;
                 border: 1px solid rgba(116, 88, 255, 0.18);
                 box-shadow: 0 18px 36px rgba(68, 30, 148, 0.14) !important;
+                color: #ffffff;
             }
 
             @media (max-width: 900px) {
@@ -234,7 +243,8 @@ def build_messages(
         scenario_lines.append(f"Refinement requests: {refinements.strip()}")
 
     scenario_lines.append(
-        "Return at least 6 SAP-relevant tables covering data sources, KPIs, and enablement assets for this scenario. "
+        "Return at least 6 imagined SAP-relevant tables (conceptual, not from any live database) covering data sources, KPIs, and enablement assets. "
+        "Do not query or rely on external databases (e.g., HANA); instead, propose plausible columns and include 1–2 illustrative sample rows. "
         "Provide a compelling agentName and a businessCaseCard string with emoji headers (Problem, Solution, Benefits, ROI)."
     )
 
@@ -375,7 +385,7 @@ def render_holographic_card(content: str) -> None:
                 line-height: 1.55;
                 font-size: 0.95rem;
                 font-family: 'Inter', sans-serif;
-                color: #e2e8f0;
+                color: #ffffff;
                 text-shadow: 0 0 14px rgba(59,130,246,0.35);
             }}
         </style>
@@ -386,69 +396,73 @@ def render_holographic_card(content: str) -> None:
 
 
 def build_default_tool_payloads() -> List[Dict[str, Any]]:
-    """Return tool payloads for Perplexity and HANA using environment variables.
+    """Return a single Perplexity tool payload.
 
-    - Perplexity tool: type defaults to 'bringyourown', config uses {'name': 'destination', 'value': <env or 'perplexity'>}
-    - HANA tool: included only if required HANA env vars are present; optional human approval config included if set.
+    - Tool: type 'bringyourown', config uses {'name': 'destination', 'value': <env or 'perplexity'>}
     """
-    tools: List[Dict[str, Any]] = []
-
-    # Perplexity destination tool
-    p_type = os.getenv("PPLX_TOOL_TYPE", "bringyourown").strip() or "bringyourown"
-    p_dest = os.getenv("PPLX_DESTINATION", "perplexity").strip() or "perplexity"
-    tools.append({
-        "name": "Perplexity Destination",
-        "type": p_type,
-        "config": [
-            {"name": "destination", "value": p_dest},
-        ],
-    })
-
-    # HANA tool (conditionally include if required vars present)
-    hana_host = os.getenv("HANA_HOST", "").strip()
-    hana_port = os.getenv("HANA_PORT", "443").strip()
-    hana_user = os.getenv("HANA_USER", "").strip()
-    hana_password = os.getenv("HANA_PASSWORD", "").strip()
-    # Prefer HANA_SCHEMA if provided, fallback to HANA_CATALOG_SCHEMA
-    hana_schema = os.getenv("HANA_SCHEMA", "").strip() or os.getenv("HANA_CATALOG_SCHEMA", "").strip()
-
-    if hana_host and hana_user and hana_password and hana_schema:
-        cfg: List[Dict[str, str]] = [
-            {"name": "host", "value": hana_host},
-            {"name": "port", "value": hana_port},
-            {"name": "user", "value": hana_user},
-            {"name": "password", "value": hana_password},
-            {"name": "schema", "value": hana_schema},
-        ]
-        # Optional human approval flags
-        human_approval = os.getenv("HANA_HUMAN_APPROVAL", "").strip()
-        if human_approval:
-            cfg.append({"name": "humanApproval", "value": human_approval})
-        human_prompt = os.getenv("HANA_HUMAN_APPROVAL_PROMPT", "").strip()
-        if human_prompt:
-            cfg.append({"name": "humanApprovalMessageFormattingPrompt", "value": human_prompt})
-        tools.append({
-            "name": "SAP HANA Datasource",
-            "type": "hana",
-            "config": cfg,
-        })
-
-    return tools
+    p_value = os.getenv("PPLX_DESTINATION", "perplexity").strip() or "perplexity"
+    return [
+        {
+            "name": "Perplexity Destination",
+            "type": "bringyourown",
+            "config": [
+                {"name": "destination", "value": p_value},
+            ],
+        }
+    ]
 
 
 def provision_agent_tools(agent_id: str) -> List[Dict[str, Any]]:
-    """Create the default tool set for the specified agent and return their names/types and API responses."""
+    """Create the default tool set for the specified agent, with fallback schema if the primary payload fails.
 
+    Primary payload uses config name 'perplexity'. If the landscape rejects it, we retry with 'destination'.
+    Returns tool summaries including raw API responses.
+    """
     created_tools: List[Dict[str, Any]] = []
     for payload in build_default_tool_payloads():
-        res = create_agent_tool(agent_id, payload)
-        created_tools.append(
-            {
-                "name": payload.get("name", "Unnamed tool"),
-                "type": payload.get("type", ""),
-                "response": res,
+        try:
+            res = create_agent_tool(agent_id, payload)
+            created_tools.append(
+                {
+                    "name": payload.get("name", "Unnamed tool"),
+                    "type": payload.get("type", ""),
+                    "response": res,
+                }
+            )
+        except SAPAgentAPIError as exc:
+            # Fallback to alternate schema using 'destination' key
+            # Carry forward the value from the original payload's config if present, else default to 'perplexity'
+            cfg_list = payload.get("config") or []
+            dest_val = "perplexity"
+            for entry in cfg_list:
+                if isinstance(entry, dict) and entry.get("name") in ("perplexity", "destination"):
+                    dest_val = str(entry.get("value", "perplexity")) or "perplexity"
+                    break
+            alt_payload: Dict[str, Any] = {
+                "name": "Web Search Tool",
+                "type": payload.get("type", "bringyourown"),
+                "config": [{"name": "perplexity", "value": dest_val}],
             }
-        )
+            try:
+                alt_res = create_agent_tool(agent_id, alt_payload)
+                created_tools.append(
+                    {
+                        "name": alt_payload.get("name", "Web Search Tool"),
+                        "type": alt_payload.get("type", ""),
+                        "response": alt_res,
+                        "fallbackFrom": payload.get("name", "Unnamed tool"),
+                        "error": str(exc),
+                    }
+                )
+            except SAPAgentAPIError as exc2:
+                created_tools.append(
+                    {
+                        "name": payload.get("name", "Unnamed tool"),
+                        "type": payload.get("type", ""),
+                        "response": {"error": str(exc2), "status": getattr(exc2, "status_code", None)},
+                        "failed": True,
+                    }
+                )
     return created_tools
 
 
@@ -509,14 +523,16 @@ def streamlit_app() -> None:
     if "agent_tools" not in st.session_state:
         st.session_state["agent_tools"] = []
 
-    header_cols = st.columns([1, 3])
-    with header_cols[0]:
-        st.image(SAP_LOGO_URL, width=120)
-    with header_cols[1]:
-        st.title("Joule x BTP - Make a Wish ✨")
-        st.caption(
-            "Describe the customer scenario, highlight the SAP solution and metric, then let Perplexity + SAP Joule craft the agent."
-        )
+    st.markdown(
+        f'''
+        <div class="app-banner">
+          <img src="{SAP_LOGO_URL}" alt="SAP" style="height: 48px;" />
+          <h1 style="margin: 0;">Joule + BTP = Make a Wish ✨</h1>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
 
 
     with st.form("scenario-form"):
@@ -539,13 +555,13 @@ def streamlit_app() -> None:
             value=st.session_state.get("metric", ""),
             placeholder="e.g. Net revenue retention, Time-to-value, Customer adoption score",
         )
-        submitted = st.form_submit_button("Generate with Perplexity  🚀")
+        submitted = st.form_submit_button("Generate Joule Agent 🚀")
 
     if submitted:
         if not customer.strip() or not use_case.strip():
             st.error("Please provide both a customer name and use case before generating.")
         else:
-            with st.spinner("Calling Perplexity to assemble the SAP Joule proposal…"):
+            with st.spinner("Calling AI to assemble the SAP Joule proposal…"):
                 try:
                     package = request_demo_package(customer, use_case, main_solution, metric)
                 except Exception as exc:  # pragma: no cover - surfaced to UI
@@ -570,51 +586,35 @@ def streamlit_app() -> None:
                     )
                     st.session_state.pop("agent_success", None)
                     st.session_state.pop("agent_error", None)
-                    st.success("Perplexity response received. Review the proposal below.")
+                    st.success("Response received. Review the proposal below.")
 
     package = st.session_state.get("demo_package")
     if not package:
-        st.info("Enter scenario details above and click Generate to see the SAP Joule proposal.")
+        #st.info("Enter scenario details above and click Generate to see the SAP Joule proposal.")
         return
 
     st.divider()
     st.subheader("SAP Joule proposal 🪄")
 
-    info_cols = st.columns(4)
-    info_cols[0].metric("Agent name", st.session_state.get("agent_name_edit", package.get("agentName", "—")))
-    info_cols[1].metric("Schema name", st.session_state.get("schema_name_edit", package.get("schemaName", "—")))
-    info_cols[2].metric("Main SAP solution", st.session_state.get("main_solution", "—"))
-    info_cols[3].metric("Optimisation metric", st.session_state.get("metric", "—"))
+    st.text_input("Agent name", key="agent_name_edit")
 
-    st.markdown("**🛠 Editable details**")
-    edit_cols = st.columns(2)
-    with edit_cols[0]:
-        st.text_input("Agent name", key="agent_name_edit")
-        st.text_input("Schema name", key="schema_name_edit")
-    with edit_cols[1]:
-        st.text_area("Agent prompt", key="agent_prompt_edit", height=220)
-
-    st.markdown("**🎴 Business case card (editable & preview)**")
-    st.text_area("Business case narrative", key="business_case_card_edit", height=220)
+    st.markdown("**🎴 Business case**")
     render_holographic_card(st.session_state.get("business_case_card_edit", ""))
 
-    st.markdown("**🧠 Agent prompt preview**")
-    st.code(st.session_state.get("agent_prompt_edit", ""), language="text")
 
     tables = package.get("tables", [])
     if tables:
         display_tables(tables)
     else:
-        st.warning("Perplexity did not return any tables for this scenario.")
-
+        st.warning("No tables returned for this scenario.")
+    """
     st.divider()
     st.subheader("Iterate on the proposal 🔁")
-    st.markdown("Provide additional instructions for Perplexity to refine the agent.")
     st.text_area(
         "Adjustments or change requests",
         key="refinement_text",
-        placeholder="e.g. Emphasise SAP Datasphere KPIs and add a sustainability table.",
-        height=140,
+        placeholder="Add adjustments",
+        height=100,
     )
 
     if st.button("✨ Regenerate with adjustments", type="secondary"):
@@ -622,9 +622,9 @@ def streamlit_app() -> None:
         if not refinement_text.strip():
             st.warning("Enter some refinement instructions before regenerating.")
         else:
-            with st.spinner("Revising proposal with Perplexity…"):
+            with st.spinner("Revising proposal..."):
                 regenerate_proposal(refinement_text)
-
+    """
     st.divider()
     st.subheader("Create the SAP agent ✅")
 
@@ -636,7 +636,7 @@ def streamlit_app() -> None:
 
     button_cols = st.columns((1, 1))
     with button_cols[0]:
-        st.info("PDF export is temporarily unavailable while we rebuild it.")
+        pass
 
     st.markdown("**SAP Agents configuration**")
     agent_cols = st.columns(2)
@@ -669,55 +669,58 @@ def streamlit_app() -> None:
         )
         payload["schemaName"] = schema_name
 
-        # HANA provisioning with detailed debug info
-        try:
-            conn = hana_connect()
-            debug_lines.append(
-                f"Connected to HANA at {os.getenv('HANA_HOST','?')}:{os.getenv('HANA_PORT','443')} as {os.getenv('HANA_USER','?')}"
-            )
-            ensure_catalog(conn)
-            debug_lines.append(f"Ensured catalog schema '{os.getenv('HANA_CATALOG_SCHEMA', 'AGENT_CATALOG')}'")
-
-            table_models = [TableDefinition(**table) for table in payload.get("tables", [])]
-            with st.spinner("Provisioning HANA schema and loading tables…"):
-                create_schema_with_tables(conn, schema_name, table_models)
-                debug_lines.append(f"Created/updated schema '{schema_name}' with {len(table_models)} tables")
-
-                # Inspect row counts for created tables
-                try:
-                    cur = conn.cursor()
-                    for t in table_models:
-                        tname = sanitize_identifier(t.name)
-                        cur.execute(f'SELECT COUNT(*) FROM "{schema_name}"."{tname}"')
-                        count = cur.fetchone()[0]
-                        debug_lines.append(f"Table {schema_name}.{tname}: {count} rows")
-                except Exception as count_exc:
-                    debug_lines.append(f"Row count check failed: {count_exc}")
-
-                register_agent_metadata(
-                    conn,
-                    agent_id=str(uuid.uuid4()),
-                    agent_name=payload.get("name", "SAP Joule Agent"),
-                    use_case=payload.get("useCase", ""),
-                    customer=payload.get("customer", ""),
-                    schema_name=schema_name,
-                    prompt=payload.get("prompt", ""),
-                    business_case_card=payload.get("businessCaseCard", ""),
-                    tables=table_models,
+        # HANA provisioning with detailed debug info (optional)
+        if os.getenv("JOULE_SKIP_HANA", "true").lower() == "true":
+            debug_lines.append("Skipping HANA provisioning (JOULE_SKIP_HANA=true).")
+        else:
+            try:
+                conn = hana_connect()
+                debug_lines.append(
+                    f"Connected to HANA at {os.getenv('HANA_HOST','?')}:{os.getenv('HANA_PORT','443')} as {os.getenv('HANA_USER','?')}"
                 )
-                debug_lines.append("Registered agent metadata in catalog")
-                hana_success = True
-                st.success(f"HANA schema '{schema_name}' created and tables populated.")
-        except Exception as exc:  # pragma: no cover - HANA diagnostics
-            st.session_state["agent_error"] = f"HANA provisioning failed: {exc}"
-            st.error(st.session_state["agent_error"])
-            debug_lines.append("HANA error:\n" + traceback.format_exc())
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:  # pragma: no cover - cleanup best effort
-                    pass
+                ensure_catalog(conn)
+                debug_lines.append(f"Ensured catalog schema '{os.getenv('HANA_CATALOG_SCHEMA', 'AGENT_CATALOG')}'")
+
+                table_models = [TableDefinition(**table) for table in payload.get("tables", [])]
+                with st.spinner("Provisioning HANA schema and loading tables…"):
+                    create_schema_with_tables(conn, schema_name, table_models)
+                    debug_lines.append(f"Created/updated schema '{schema_name}' with {len(table_models)} tables")
+
+                    # Inspect row counts for created tables
+                    try:
+                        cur = conn.cursor()
+                        for t in table_models:
+                            tname = sanitize_identifier(t.name)
+                            cur.execute(f'SELECT COUNT(*) FROM "{schema_name}"."{tname}"')
+                            count = cur.fetchone()[0]
+                            debug_lines.append(f"Table {schema_name}.{tname}: {count} rows")
+                    except Exception as count_exc:
+                        debug_lines.append(f"Row count check failed: {count_exc}")
+
+                    register_agent_metadata(
+                        conn,
+                        agent_id=str(uuid.uuid4()),
+                        agent_name=payload.get("name", "SAP Joule Agent"),
+                        use_case=payload.get("UseCase", payload.get("useCase", "")),
+                        customer=payload.get("customer", ""),
+                        schema_name=schema_name,
+                        prompt=payload.get("prompt", ""),
+                        business_case_card=payload.get("businessCaseCard", ""),
+                        tables=table_models,
+                    )
+                    debug_lines.append("Registered agent metadata in catalog")
+                    hana_success = True
+                    st.success(f"HANA schema '{schema_name}' created and tables populated.")
+            except Exception as exc:  # pragma: no cover - HANA diagnostics
+                st.session_state["agent_error"] = f"HANA provisioning failed: {exc}"
+                st.error(st.session_state["agent_error"])
+                debug_lines.append("HANA error:\n" + traceback.format_exc())
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:  # pragma: no cover - cleanup best effort
+                        pass
 
         # SAP Agent creation and tool attachment with debug info
         try:
@@ -742,8 +745,11 @@ def streamlit_app() -> None:
 
             agent_id = data.get("id") or data.get("agentId")
             if not agent_id:
-                raise RuntimeError("SAP Agents response did not include an agent identifier.")
-            debug_lines.append(f"Created SAP Agent with id {agent_id}")
+                st.session_state["agent_error"] = "SAP Agents response did not include an agent identifier."
+                st.error(st.session_state["agent_error"])
+                return
+            else:
+                debug_lines.append(f"Created SAP Agent with id {agent_id}")
             debug_lines.append(f"SAP Agents base URL: {os.getenv('SAP_AGENT_BASE_URL','(unset)')}")
 
             with st.spinner("Provisioning default SAP Joule tools…"):
@@ -780,23 +786,60 @@ def streamlit_app() -> None:
             st.error(st.session_state["agent_error"])
             debug_lines.append("Import error:\n" + traceback.format_exc())
         except SAPAgentAPIError as exc:
-            st.session_state["agent_error"] = f"SAP Agents API error ({exc.status_code}): {exc}"
-            st.session_state["agent_tools"] = []
-            st.error(st.session_state["agent_error"])
-            debug_lines.append(f"SAP Agents API error ({exc.status_code}): {exc}")
+            if getattr(exc, "status_code", None) == 409:
+                # Conflict: agent name already exists. Retry creation with a unique name and attach tools to the new agent.
+                try:
+                    from create_agent import create_agent as _create_agent_retry
+                    base_name = st.session_state.get("sap_agent_name", "Web Search Expert").strip() or "Web Search Expert"
+                    unique_suffix = str(uuid.uuid4())[:8]
+                    new_name = f"{base_name}-{unique_suffix}"
+                    debug_lines.append(f"409 conflict. Retrying with unique name '{new_name}'")
+                    with st.spinner("Retrying agent creation with a unique name…"):
+                        data = _create_agent_retry(
+                            payload={
+                                "name": new_name,
+                                "type": "smart",
+                                "safetyCheck": True,
+                                "expertIn": st.session_state.get("sap_agent_expert_in", "").strip()
+                                or "You are an expert in searching the web",
+                                "initialInstructions": st.session_state.get("sap_agent_instructions", "").strip()
+                                or "## WebSearch Tool Hint\nTry to append 'Wikipedia' to your search query",
+                                "iterations": 100,
+                                "baseModel": "OpenAiGpt4oMini",
+                                "advancedModel": "OpenAiGpt4o",
+                            }
+                        )
+                    agent_id = data.get("id") or data.get("agentId") or data.get("ID") or data.get("Id")
+                    if not agent_id:
+                        st.session_state["agent_error"] = "SAP Agents response did not include an agent identifier after retry."
+                        st.error(st.session_state["agent_error"])
+                        return
+
+                    with st.spinner("Provisioning default SAP Joule tools…"):
+                        tool_summaries = provision_agent_tools(agent_id)
+
+                    st.session_state["agent_success"] = data
+                    st.session_state["agent_tools"] = tool_summaries
+                    st.session_state["agent_error"] = None
+                    st.success("Agent created with a unique name and tools attached.")
+                except Exception as rex:
+                    st.session_state["agent_error"] = f"Agent creation retry failed: {rex}"
+                    st.session_state["agent_tools"] = []
+                    st.error(st.session_state["agent_error"])
+                    debug_lines.append(f"Retry after 409 failed: {rex}")
+            else:
+                st.session_state["agent_error"] = "SAP Agents API error"
+                st.session_state["agent_tools"] = []
+                debug_lines.append(f"SAP Agents API error ({getattr(exc,'status_code',None)}): {exc}")
         except Exception as exc:  # pragma: no cover
             st.session_state["agent_error"] = f"Agent creation workflow failed: {exc}"
             st.session_state["agent_tools"] = []
             st.error(st.session_state["agent_error"])
             debug_lines.append("Agent creation error:\n" + traceback.format_exc())
 
-        # Final debug details
-        with st.expander("Debug details (HANA and SAP Agents)", expanded=False):
-            st.code("\n".join(debug_lines) or "No debug details available.", language="text")
+        # Debug details suppressed per requirements
 
 
-    if st.session_state.get("agent_error"):
-        st.warning(st.session_state["agent_error"])
 
     with st.expander("Agent payload (JSON)", expanded=False):
         st.code(json.dumps(payload, indent=2), language="json")
