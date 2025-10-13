@@ -126,6 +126,13 @@ class SAPAgentsClient:
     def create_agent(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         return self.post('Agents', payload)
 
+    def create_tool(self, agent_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not agent_id:
+            raise ValueError('agent_id is required to create a tool')
+        safe_agent_id = agent_id.replace("'", "''")
+        path = f"Agents('{safe_agent_id}')/tools"
+        return self.post(path, payload)
+
 
 _default_client: Optional[SAPAgentsClient] = None
 
@@ -142,4 +149,9 @@ def PostAgentsAPI(path: str, data: Optional[Dict[str, Any]] = None) -> Dict[str,
     return client.post(path, data)
 
 
-__all__ = ['SAPAgentAPIError', 'SAPAgentsClient', 'PostAgentsAPI', 'get_default_client']
+def create_agent_tool(agent_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    client = get_default_client()
+    return client.create_tool(agent_id, payload)
+
+
+__all__ = ['SAPAgentAPIError', 'SAPAgentsClient', 'PostAgentsAPI', 'create_agent_tool', 'get_default_client']

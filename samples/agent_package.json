@@ -1,0 +1,58 @@
+{
+  "agent": {
+    "name": "Web Search Expert",
+    "type": "smart",
+    "safetyCheck": true,
+    "expertIn": "You are an expert in searching the web",
+    "initialInstructions": "## WebSearch Tool Hint\\nTry to append 'Wikipedia' to your search query",
+    "iterations": 100,
+    "baseModel": "OpenAiGpt4oMini",
+    "advancedModel": "OpenAiGpt4o"
+  },
+  "tools": [
+    {
+      "name": "Perplexity Destination",
+      "type": "bringyourown",
+      "config": [
+        {
+          "name": "destination",
+          "value": "perplexity"
+        }
+      ]
+    },
+    {
+      "name": "SAP HANA Datasource",
+      "type": "hana",
+      "config": [
+        {
+          "name": "host",
+          "value": "your-hana-host.example.com"
+        },
+        {
+          "name": "port",
+          "value": "443"
+        },
+        {
+          "name": "user",
+          "value": "YOUR_HANA_USER"
+        },
+        {
+          "name": "password",
+          "value": "YOUR_HANA_PASSWORD"
+        },
+        {
+          "name": "schema",
+          "value": "YOUR_WORKING_SCHEMA"
+        },
+        {
+          "name": "humanApproval",
+          "value": "false"
+        },
+        {
+          "name": "humanApprovalMessageFormattingPrompt",
+          "value": ""
+        }
+      ]
+    }
+  ]
+}

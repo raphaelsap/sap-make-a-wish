@@ -100,41 +100,60 @@ def sanitize_identifier(value: str, fallback: str = 'JOULE_SCHEMA') -> str:
 
 def ensure_catalog(conn) -> None:
     cur = conn.cursor()
-    cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{CATALOG_SCHEMA}"')
-    cur.execute(
-        f'''
-        CREATE TABLE IF NOT EXISTS "{CATALOG_SCHEMA}"."AGENTS" (
-            "AGENT_ID" NVARCHAR(36) PRIMARY KEY,
-            "AGENT_NAME" NVARCHAR(120) NOT NULL,
-            "USE_CASE" NVARCHAR(120) NOT NULL,
-            "CUSTOMER" NVARCHAR(120) NOT NULL,
-            "CREATED_AT" TIMESTAMP DEFAULT CURRENT_UTCTIMESTAMP NOT NULL,
-            "CREATED_BY" NVARCHAR(120) NOT NULL,
-            "PROMPT" NCLOB NOT NULL,
-            "BUSINESS_CASE_CARD" NCLOB NOT NULL,
-            "SCHEMA_NAME" NVARCHAR(128) NOT NULL
+    # Create schema (ignore error if it already exists)
+    try:
+        cur.execute(f'CREATE SCHEMA "{CATALOG_SCHEMA}"')
+    except dbapi.Error:
+        LOGGER.debug('Schema %s already exists.', CATALOG_SCHEMA)
+
+    # Helper: check table existence
+    def _table_exists(schema: str, table: str) -> bool:
+        cur.execute('SELECT 1 FROM "SYS"."TABLES" WHERE "SCHEMA_NAME" = ? AND "TABLE_NAME" = ?', (schema, table))
+        return cur.fetchone() is not None
+
+    # Create AGENTS table if missing
+    if not _table_exists(CATALOG_SCHEMA, 'AGENTS'):
+        cur.execute(
+            f'''
+            CREATE TABLE "{CATALOG_SCHEMA}"."AGENTS" (
+                "AGENT_ID" NVARCHAR(36) PRIMARY KEY,
+                "AGENT_NAME" NVARCHAR(120) NOT NULL,
+                "USE_CASE" NVARCHAR(120) NOT NULL,
+                "CUSTOMER" NVARCHAR(120) NOT NULL,
+                "CREATED_AT" TIMESTAMP DEFAULT CURRENT_UTCTIMESTAMP NOT NULL,
+                "CREATED_BY" NVARCHAR(120) NOT NULL,
+                "PROMPT" NCLOB NOT NULL,
+                "BUSINESS_CASE_CARD" NCLOB NOT NULL,
+                "SCHEMA_NAME" NVARCHAR(128) NOT NULL
+            )
+            '''
         )
-        '''
-    )
-    cur.execute(
-        f'''
-        CREATE TABLE IF NOT EXISTS "{CATALOG_SCHEMA}"."AGENT_ASSETS" (
-            "AGENT_ID" NVARCHAR(36) NOT NULL,
-            "ASSET_NAME" NVARCHAR(120) NOT NULL,
-            "SCHEMA_NAME" NVARCHAR(128) NOT NULL,
-            "TABLE_NAME" NVARCHAR(128) NOT NULL,
-            "METADATA" NCLOB,
-            PRIMARY KEY ("AGENT_ID", "ASSET_NAME"),
-            FOREIGN KEY ("AGENT_ID") REFERENCES "{CATALOG_SCHEMA}"."AGENTS" ("AGENT_ID")
+
+    # Create AGENT_ASSETS table if missing
+    if not _table_exists(CATALOG_SCHEMA, 'AGENT_ASSETS'):
+        cur.execute(
+            f'''
+            CREATE TABLE "{CATALOG_SCHEMA}"."AGENT_ASSETS" (
+                "AGENT_ID" NVARCHAR(36) NOT NULL,
+                "ASSET_NAME" NVARCHAR(120) NOT NULL,
+                "SCHEMA_NAME" NVARCHAR(128) NOT NULL,
+                "TABLE_NAME" NVARCHAR(128) NOT NULL,
+                "METADATA" NCLOB,
+                PRIMARY KEY ("AGENT_ID", "ASSET_NAME"),
+                FOREIGN KEY ("AGENT_ID") REFERENCES "{CATALOG_SCHEMA}"."AGENTS" ("AGENT_ID")
+            )
+            '''
         )
-        '''
-    )
+
     conn.commit()
 
 
 def create_schema_with_tables(conn, schema_name: str, tables: List[TableDefinition]) -> None:
     cur = conn.cursor()
-    cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"')
+    try:
+        cur.execute(f'CREATE SCHEMA "{schema_name}"')
+    except dbapi.Error:
+        LOGGER.debug('Schema %s already exists.', schema_name)
 
     for table in tables:
         table_name = sanitize_identifier(table.name)
