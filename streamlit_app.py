@@ -1012,7 +1012,7 @@ def streamlit_app() -> None:
     if st.session_state.get("agent_success") and st.session_state.get("agent_tools"):
         st.link_button("Open SAP Agents workspace →", SAP_AGENT_UI_URL)
     elif st.session_state.get("agent_success") and not st.session_state.get("agent_error"):
-        st.info("Agent created, but no tools were attached. Attach tools before visiting the workspace.")
+        st.link_button("Open SAP Agents workspace →", SAP_AGENT_UI_URL)
 
 
 if __name__ == "__main__":
