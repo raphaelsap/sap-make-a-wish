@@ -4,3 +4,5 @@ python-dotenv>=1.0,<2.0
 markdown>=3.6
 fastapi>=0.111
 hdbcli==2.21.31
+sap-ai-sdk-gen>=5.6.3
+fpdf2>=2.7,<3.0

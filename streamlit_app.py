@@ -1,4 +1,4 @@
-"""Streamlit app for generating SAP Joule agents via Perplexity."""
+"""Streamlit app for generating SAP Joule agents via SAP AI Core."""
 
 from __future__ import annotations
 
@@ -12,6 +12,9 @@ from typing import Any, Dict, List, Optional
 
 import requests
 import streamlit as st
+from io import BytesIO
+from fpdf import FPDF
+from ai_core_llm import AICoreChatLLM
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -28,10 +31,10 @@ from server.app import (
 )
 
 
-PPLX_API_URL = "https://api.perplexity.ai/chat/completions"
-DEFAULT_PPLX_MODEL = os.getenv("PPLX_MODEL", "sonar")
+# Using SAP AI Core via AICoreChatLLM (see ai_core_llm.py)
 PROMPT_FILE = Path(__file__).parent / "prompts" / "perplexity.md"
 SAP_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg"
+SAP_LOGO_PNG_URL = "https://upload.wikimedia.org/wikipedia/commons/2/26/SAP_logo.png"
 SAP_AGENT_UI_URL = "https://agents-y0yj1uar.baf-dev.cfapps.eu12.hana.ondemand.com/ui/index.html#/agents"
 
 
@@ -45,9 +48,7 @@ def inject_global_styles() -> None:
 
             html, body, [data-testid="stAppViewContainer"] {
                 font-family: 'Manrope', sans-serif;
-                background: radial-gradient(circle at 20% 20%, rgba(28, 35, 52, 0.6), transparent 55%),
-                            radial-gradient(circle at 80% 15%, rgba(22, 27, 41, 0.5), transparent 60%),
-                            linear-gradient(135deg, #0b1220 0%, #0e1426 50%, #121a2e 100%);
+                background: #0d1117;
                 color: #ffffff;
             }
             body * {
@@ -91,13 +92,15 @@ def inject_global_styles() -> None:
             }
 
             div[data-baseweb="input"] > div > input,
-            [data-baseweb="textarea"] textarea {
+            [data-baseweb="textarea"] textarea,
+            .stTextInput input,
+            .stTextArea textarea {
                 border-radius: 16px !important;
                 border: 1px solid rgba(125, 88, 255, 0.22) !important;
                 background: rgba(22, 26, 36, 0.92) !important;
                 box-shadow: inset 0 1px 2px rgba(82, 40, 160, 0.08) !important;
                 color: #ffffff !important;
-            }
+ }
             div[data-baseweb="input"] > div > input::placeholder,
             [data-baseweb="textarea"] textarea::placeholder {
                 color: #ffffff !important;
@@ -110,24 +113,26 @@ def inject_global_styles() -> None:
                 box-shadow: 0 0 0 3px rgba(111, 76, 250, 0.18) !important;
             }
 
-            [data-testid="baseButton-primary"] {
-                background: linear-gradient(120deg, #6f4cfa, #af59ff) !important;
-                border: none !important;
-                box-shadow: 0 18px 38px rgba(111, 76, 250, 0.28) !important;
+            [data-testid="baseButton-primary"],
+            .stButton > button,
+            a.stLinkButton {
+                background: #2a2f45 !important;
+                border: 1px solid rgba(125, 88, 255, 0.30) !important;
                 border-radius: 999px !important;
                 font-weight: 700 !important;
                 padding: 0.7rem 1.8rem !important;
                 color: #ffffff !important;
+                box-shadow: none !important;
             }
 
             [data-testid="baseButton-secondary"] {
-                background: rgba(255, 255, 255, 0.8) !important;
+                background: #2a2f45 !important;
                 color: #ffffff !important;
-                border: 1px solid rgba(125, 88, 255, 0.22) !important;
+                border: 1px solid rgba(125, 88, 255, 0.30) !important;
                 border-radius: 999px !important;
                 font-weight: 700 !important;
                 padding: 0.7rem 1.8rem !important;
-                box-shadow: 0 16px 30px rgba(128, 96, 255, 0.16) !important;
+                box-shadow: none !important;
             }
 
             [data-testid="metric-container"] {
@@ -147,6 +152,16 @@ def inject_global_styles() -> None:
                 color: #ffffff;
             }
 
+            [data-testid="stTable"] table, .stDataFrame table {
+                background: #0f1320 !important;
+                color: #ffffff !important;
+            }
+            [data-testid="stTable"] th, [data-testid="stTable"] td,
+            .stDataFrame th, .stDataFrame td {
+                color: #ffffff !important;
+                border-color: rgba(116, 88, 255, 0.2) !important;
+            }
+
             @media (max-width: 900px) {
                 [data-testid="stAppViewContainer"] > .main {
                     padding: 0 1.5rem 3rem;
@@ -162,6 +177,10 @@ def inject_global_styles() -> None:
         unsafe_allow_html=True,
     )
 
+
+@st.cache_resource(show_spinner=False)
+def get_llm():
+    return AICoreChatLLM.from_env()
 
 @st.cache_resource(show_spinner=False)
 def load_prompt_sections() -> Dict[str, str]:
@@ -209,13 +228,9 @@ def adapt_agent_prompt_with_context(
     max_tokens: int = 4096,
 ) -> str:
     """
-    Use Perplexity to merge and adapt the base LLM-generated prompt with agent_context.md
+    Use SAP AI Core to merge and adapt the base LLM-generated prompt with agent_context.md
     to the specific customer scenario. Returns the final prompt text (no code fences).
     """
-    api_key = os.getenv("PPLX_API_KEY")
-    if not api_key:
-        raise RuntimeError("Set PPLX_API_KEY in your environment to adapt the prompt with Perplexity.")
-
     system_instruction = (
         "You are an expert SAP Joule prompt editor. "
         "Given (1) a basePrompt from a prior generation and (2) a contextBlock with SAP- and HANA-specific policy/format, "
@@ -249,31 +264,16 @@ Task:
 - Return ONLY the finalPrompt text, no code fences.
 """.strip()
 
-    payload = {
-        "model": DEFAULT_PPLX_MODEL,
-        "messages": [
-            {"role": "system", "content": system_instruction},
-            {"role": "user", "content": user_content},
-        ],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-
-    resp = requests.post(
-        PPLX_API_URL,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json=payload,
-        timeout=120,
-    )
-    if resp.status_code >= 400:
-        raise RuntimeError(f"Perplexity API error {resp.status_code}: {resp.text}")
-
-    data = resp.json()
+    messages = [
+        {"role": "system", "content": system_instruction},
+        {"role": "user", "content": user_content},
+    ]
+    content = get_llm().generate(messages)
     try:
-        content = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError("Unexpected Perplexity response shape during prompt adaptation") from exc
-
+        st.session_state.setdefault("llm_logs", [])
+        st.session_state["llm_logs"].append({"phase": "adaptation", "messages": messages, "response": content})
+    except Exception:
+        pass
     return strip_code_fences(content).strip()
 
 def strip_code_fences(content: str) -> str:
@@ -290,14 +290,14 @@ def parse_llm_payload(content: str) -> Dict[str, Any]:
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError as exc:  # pragma: no cover - surfaced via UI
-        raise ValueError("Perplexity response was not valid JSON") from exc
+        raise ValueError("LLM response was not valid JSON") from exc
 
     if not isinstance(parsed, dict):
-        raise ValueError("Perplexity response must be a JSON object")
+        raise ValueError("LLM response must be a JSON object")
 
     tables = parsed.get("tables")
     if not isinstance(tables, list) or not tables:
-        raise ValueError("Perplexity response missing tables array")
+        raise ValueError("LLM response missing tables array")
 
     return parsed
 
@@ -369,36 +369,13 @@ def request_demo_package(
     refinements: Optional[str] = None,
     current_fields: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    api_key = os.getenv("PPLX_API_KEY")
-    if not api_key:
-        raise RuntimeError("Set PPLX_API_KEY in your environment to call Perplexity.")
-
-    payload = {
-        "model": DEFAULT_PPLX_MODEL,
-        "messages": build_messages(customer, use_case, main_solution, metric, refinements, current_fields),
-        "max_tokens": 4096,
-        "temperature": 0.15,
-    }
-
-    response = requests.post(
-        PPLX_API_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=120,
-    )
-
-    if response.status_code >= 400:
-        raise RuntimeError(f"Perplexity API error {response.status_code}: {response.text}")
-
-    data = response.json()
+    messages = build_messages(customer, use_case, main_solution, metric, refinements, current_fields)
+    content = get_llm().generate(messages)
     try:
-        content = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:  # pragma: no cover
-        raise RuntimeError("Unexpected Perplexity response shape") from exc
-
+        st.session_state.setdefault("llm_logs", [])
+        st.session_state["llm_logs"].append({"phase": "proposal", "messages": messages, "response": content})
+    except Exception:
+        pass
     return parse_llm_payload(content)
 
 
@@ -487,6 +464,152 @@ def render_holographic_card(content: str) -> None:
     )
 
 
+def build_markdown_report(
+    package: Dict[str, Any],
+    prompt_text: str,
+    customer: str,
+    use_case: str,
+    main_solution: str,
+    metric: str,
+) -> str:
+    """Compose a concise Markdown report for download."""
+    agent_name = (st.session_state.get("agent_name_edit") or package.get("agentName") or "SAP Joule Agent").strip()
+    business_case = (st.session_state.get("business_case_card_edit") or package.get("businessCaseCard") or "").strip()
+    tables: List[Dict[str, Any]] = package.get("tables", []) or []
+
+    lines: List[str] = []
+    # Use remote PNG for broad compatibility
+    lines.append(f"![SAP]({SAP_LOGO_PNG_URL})")
+    lines.append("")
+    lines.append("# SAP Joule Agent Report")
+    lines.append("")
+    lines.append("## Scenario")
+    lines.append(f"- Customer: {customer or '—'}")
+    lines.append(f"- Use case: {use_case or '—'}")
+    lines.append(f"- Main SAP solution: {main_solution or '—'}")
+    lines.append(f"- Metric: {metric or '—'}")
+    lines.append("")
+    lines.append("## Agent Name")
+    lines.append(agent_name)
+    lines.append("")
+    lines.append("## Business Case")
+    lines.append(business_case or "—")
+    lines.append("")
+    lines.append("## Agent Prompt")
+    lines.append((prompt_text or "").strip() or "—")
+    lines.append("")
+    lines.append("## Data Products")
+    if not tables:
+        lines.append("No tables provided.")
+    else:
+        for t in tables:
+            name = (t.get("name") or "Unnamed table")
+            desc = (t.get("desc") or t.get("description") or "").strip()
+            cols = t.get("columns", []) or []
+            lines.append(f"### {name}")
+            if desc:
+                lines.append(desc)
+            if cols:
+                lines.append("Columns:")
+                for col in cols[:50]:  # keep concise
+                    cname = str(col.get("name", "") or "")
+                    ctype = str(col.get("type", "") or "")
+                    if cname and ctype:
+                        lines.append(f"- {cname} ({ctype})")
+                    elif cname:
+                        lines.append(f"- {cname}")
+            lines.append("")
+    return "\n".join(lines).strip()
+
+
+def render_pdf_from_md(md: str, *, logo_url: str = SAP_LOGO_PNG_URL) -> bytes:
+    """Render a simple PDF from a limited subset of Markdown."""
+    # Fetch logo (optional)
+    logo_bytes: Optional[bytes] = None
+    try:
+        resp = requests.get(logo_url, timeout=20)
+        if resp.ok:
+            logo_bytes = resp.content
+    except Exception:
+        logo_bytes = None
+
+    pdf = FPDF(unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # Header with logo and title
+    y_offset = 10
+    if logo_bytes:
+        try:
+            pdf.image(BytesIO(logo_bytes), x=10, y=y_offset, w=35, type="PNG")
+            y_offset += 25
+            pdf.set_y(y_offset)
+        except Exception:
+            pass
+
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 10, "SAP Joule Agent Report", ln=1)
+
+    # Helper: coerce text to latin-1 safe for core fonts
+    def pdf_safe_text(s: str) -> str:
+        try:
+            t = (
+                s.replace("•", "-")
+                 .replace("–", "-")
+                 .replace("—", "-")
+                 .replace("“", '"')
+                 .replace("”", '"')
+                 .replace("’", "'")
+                 .replace("\u00A0", " ")
+            )
+            return t.encode("latin-1", "replace").decode("latin-1")
+        except Exception:
+            return s
+
+    # Simple Markdown rendering
+    for raw_line in md.splitlines():
+        line = raw_line.rstrip("\n")
+        if line.startswith("!["):
+            # Skip inline images; we already placed the logo
+            continue
+        if line.startswith("# "):
+            pdf.ln(2)
+            pdf.set_font("Helvetica", "B", 16)
+            pdf.multi_cell(0, 8, pdf_safe_text(line[2:].strip()))
+            continue
+        if line.startswith("## "):
+            pdf.ln(1)
+            pdf.set_font("Helvetica", "B", 13)
+            pdf.multi_cell(0, 7, pdf_safe_text(line[3:].strip()))
+            continue
+        if line.startswith("### "):
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.multi_cell(0, 6, pdf_safe_text(line[4:].strip()))
+            continue
+        if line.startswith("- "):
+            pdf.set_font("Helvetica", "", 11)
+            pdf.cell(5, 5, "-")
+            pdf.multi_cell(0, 5, pdf_safe_text(line[2:].strip()))
+            continue
+        if not line.strip():
+            pdf.ln(2)
+            continue
+        # Paragraph
+        pdf.set_font("Helvetica", "", 11)
+        pdf.multi_cell(0, 5, pdf_safe_text(line.strip()))
+
+    # Return bytes
+    try:
+        return pdf.output(dest="S").encode("latin-1", "ignore")
+    except Exception:
+        # Fallback empty PDF if rendering unexpectedly fails
+        fallback = FPDF()
+        fallback.add_page()
+        fallback.set_font("Helvetica", "", 12)
+        fallback.cell(0, 10, "Report generation failed.", ln=1)
+        return fallback.output(dest="S").encode("latin-1", "ignore")
+
+
 def build_default_tool_payloads() -> List[Dict[str, Any]]:
     """Return a single Perplexity tool payload.
 
@@ -505,7 +628,7 @@ def build_default_tool_payloads() -> List[Dict[str, Any]]:
 
 
 def provision_agent_tools(agent_id: str) -> List[Dict[str, Any]]:
-    """Create the default tool set for the specified agent, with fallback schema if the primary payload fails.
+    """Create the default tool set for the agent, with fallback schema if the primary payload fails.
 
     Primary payload uses config name 'perplexity'. If the landscape rejects it, we retry with 'destination'.
     Returns tool summaries including raw API responses.
@@ -636,6 +759,11 @@ def streamlit_app() -> None:
         st.session_state["agent_tools"] = []
     if "auto_adapt_prompt" not in st.session_state:
         st.session_state["auto_adapt_prompt"] = True
+    if "llm_logs" not in st.session_state:
+        st.session_state["llm_logs"] = []
+    st.session_state.setdefault("main_solution", "SAP S/4HANA")
+    st.session_state.setdefault("metric", "Net revenue retention")
+    st.session_state.setdefault("use_case", "Automate invoice processing")
 
     st.markdown(
         f'''
@@ -646,8 +774,6 @@ def streamlit_app() -> None:
         ''',
         unsafe_allow_html=True,
     )
-
-
 
     with st.form("scenario-form"):
         customer = st.text_input("👤 Customer name", value=st.session_state.get("customer", ""))
@@ -664,13 +790,15 @@ def streamlit_app() -> None:
                 value=st.session_state.get("main_solution", ""),
                 placeholder="e.g. SAP S/4HANA, SAP Datasphere",
             )
-        metric = st.text_input(
-            "📈 Metric for the agent to optimise",
-            value=st.session_state.get("metric", ""),
-            placeholder="e.g. Net revenue retention, Time-to-value, Customer adoption score",
-        )
-
-        submitted = st.form_submit_button("Generate Joule Agent 🚀")
+        metric_col, button_col = st.columns((2, 1))
+        with metric_col:
+            metric = st.text_input(
+                "📈 Metric for the agent to optimise",
+                value=st.session_state.get("metric", ""),
+                placeholder="e.g. Net revenue retention, Time-to-value, Customer adoption score",
+            )
+        with button_col:
+            submitted = st.form_submit_button("Generate Joule Agent 🚀", use_container_width=True)
 
     if submitted:
         if not customer.strip() or not use_case.strip():
@@ -737,12 +865,27 @@ def streamlit_app() -> None:
     st.markdown("**🎴 Business case**")
     render_holographic_card(st.session_state.get("business_case_card_edit", ""))
 
-
     tables = package.get("tables", [])
     if tables:
         display_tables(tables)
     else:
         st.warning("No tables returned for this scenario.")
+
+    with st.expander("LLM prompts and responses", expanded=False):
+        for i, log in enumerate(st.session_state.get("llm_logs", []), 1):
+            phase = str(log.get("phase", "unknown")).title()
+            st.markdown(f"**Step {i}: {phase}**")
+            st.markdown("Messages:")
+            try:
+                st.code(json.dumps(log.get("messages", []), indent=2), language="json")
+            except Exception:
+                st.code(str(log.get("messages", [])))
+            st.markdown("Response:")
+            resp = log.get("response", "")
+            try:
+                st.code(resp if isinstance(resp, str) else json.dumps(resp, indent=2), language="json")
+            except Exception:
+                st.code(str(resp))
     """
     st.divider()
     st.subheader("Iterate on the proposal 🔁")
@@ -761,6 +904,47 @@ def streamlit_app() -> None:
             with st.spinner("Revising proposal..."):
                 regenerate_proposal(refinement_text)
     """
+    # Export section
+    st.divider()
+    st.subheader("Export report 📄")
+
+    try:
+        prompt_for_export = (st.session_state.get("agent_prompt_edit") or package.get("agentPrompt", "")).strip()
+        md_report = build_markdown_report(
+            package=package,
+            prompt_text=prompt_for_export,
+            customer=st.session_state.get("customer", ""),
+            use_case=st.session_state.get("use_case", ""),
+            main_solution=st.session_state.get("main_solution", ""),
+            metric=st.session_state.get("metric", ""),
+        )
+
+        col_md, col_pdf = st.columns(2)
+        with col_md:
+            st.download_button(
+                "Download Markdown",
+                data=md_report.encode("utf-8"),
+                file_name=f"{(st.session_state.get('agent_name_edit') or package.get('agentName','agent')).strip().lower().replace(' ','_')}_report.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
+        with col_pdf:
+            pdf_bytes = None
+            try:
+                pdf_bytes = render_pdf_from_md(md_report, logo_url=SAP_LOGO_PNG_URL)
+            except Exception as exc:
+                st.warning(f"PDF generation failed: {exc}")
+            st.download_button(
+                "Download PDF",
+                data=pdf_bytes or b"",
+                file_name=f"{(st.session_state.get('agent_name_edit') or package.get('agentName','agent')).strip().lower().replace(' ','_')}_report.pdf",
+                mime="application/pdf",
+                disabled=pdf_bytes is None,
+                use_container_width=True,
+            )
+    except Exception as exc:
+        st.warning(f"Report export not available: {exc}")
+
     st.divider()
     st.subheader("Create the SAP agent ✅")
 
@@ -805,9 +989,14 @@ def streamlit_app() -> None:
         )
         payload["schemaName"] = schema_name
 
-        # HANA provisioning with detailed debug info (optional)
-        if os.getenv("JOULE_SKIP_HANA", "true").lower() == "true":
+        # HANA provisioning: auto-create when HANA_* present (unless JOULE_SKIP_HANA=true)
+        skip_hana = os.getenv("JOULE_SKIP_HANA", "").lower() == "true"
+        have_hana_env = all(os.getenv(k) for k in ("HANA_HOST", "HANA_USER", "HANA_PASSWORD"))
+        if skip_hana:
             debug_lines.append("Skipping HANA provisioning (JOULE_SKIP_HANA=true).")
+        elif not have_hana_env:
+            debug_lines.append("HANA env not fully configured; skipping provisioning.")
+            st.info("HANA environment not configured; skipping provisioning.")
         else:
             try:
                 conn = hana_connect()
@@ -942,7 +1131,7 @@ def streamlit_app() -> None:
 
             debug_lines.append(
                 "Tools attached: " + ", ".join(
-                    f"{t.get('name')} ({t.get('type')})" for t in tool_summaries if t.get('name')
+                    f"{t.get('name')} ({t.get('type')}) for t in tool_summaries if t.get('name')
                 )
             )
         except ImportError as exc:
@@ -1005,8 +1194,6 @@ def streamlit_app() -> None:
 
         # Debug details suppressed per requirements
 
-
-   
     #with st.expander("Agent payload (JSON)", expanded=False):st.code(json.dumps(payload, indent=2), language="json")
 
     if st.session_state.get("agent_success") and st.session_state.get("agent_tools"):
